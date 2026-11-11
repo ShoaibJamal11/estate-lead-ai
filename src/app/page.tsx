@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Bot,
   Send,
@@ -69,41 +69,60 @@ const GREETING_MSG: ChatMessage = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  NLP-lite helpers (global + Pakistani + US real estate)              */
+/*  NLP Helpers (Global + Pakistani + US Real Estate)                 */
 /* ------------------------------------------------------------------ */
 
 function detectIntent(text: string): string | null {
   const t = text.toLowerCase();
-  if (/\b(buy|purchase|looking\s+for|find\s+me|book\s+a\s+viewing|viewing|price)\b/.test(t)) return "Buy";
   if (/\b(rent|lease|renting|tenancy)\b/.test(t)) return "Rent";
   if (/\b(invest|investment|roi|flip|yield|capital\s+gain)\b/.test(t)) return "Invest";
+  if (
+    /\b(buy|purchase|looking\s+for|find\s+me|book\s+a\s+viewing|viewing|price|tour|visit|interested\s+in)\b/.test(
+      t
+    )
+  ) {
+    return "Buy";
+  }
   return null;
 }
 
 const KNOWN_PROPERTY_KEYWORDS = [
-  "villa", "house", "apartment", "condo", "flat", "penthouse", "townhouse",
-  "studio", "duplex", "office", "warehouse", "bungalow", "shop", "plot",
-  "commercial", "retail space",
-] as const;
+  "villa",
+  "house",
+  "apartment",
+  "condo",
+  "flat",
+  "penthouse",
+  "townhouse",
+  "studio",
+  "duplex",
+  "office",
+  "warehouse",
+  "bungalow",
+  "shop",
+  "plot",
+  "commercial",
+  "retail space",
+  "land",
+];
 
 function detectPropertyType(text: string): string | null {
   const t = text.toLowerCase();
-  /* "3 bed villa", "2-bedroom apartment", etc. */
   const bedroomMatch = t.match(
     /(\d[\s-]?bed(?:room)?[\s-]?(?:villa|house|apartment|condo|flat|penthouse|townhouse|bungalow)?)/
   );
   if (bedroomMatch) {
     return bedroomMatch[0].replace(/\b\w/g, (c) => c.toUpperCase()).replace(/-/g, " ");
   }
-  /* standalone property keywords */
   for (const kw of KNOWN_PROPERTY_KEYWORDS) {
     const re = new RegExp(`\\b${kw}(?:s|\\s+propert(?:y|ies))?\\b`, "i");
     if (re.test(t)) return kw.replace(/\b\w/g, (c) => c.toUpperCase());
   }
+  if (/\bemaar\b/i.test(t)) {
+    return "Luxury Apartment / Villa";
+  }
   return null;
 }
-
-/* --- Location ---------------------------------------------------- */
 
 const KNOWN_LOCATIONS: [string, RegExp][] = [
   /* Pakistan / South Asia */
@@ -122,7 +141,9 @@ const KNOWN_LOCATIONS: [string, RegExp][] = [
   /* Middle East */
   ["Dubai", /\bdubai\b/i],
   ["Abu Dhabi", /\babu\s*dhabi\b/i],
-  /* North America */
+  ["Doha", /\bdoha\b/i],
+  ["Riyadh", /\briyadh\b/i],
+  /* North America / UK */
   ["Miami", /\bmiami\b/i],
   ["Austin", /\baustin\b/i],
   ["Dallas", /\bdallas\b/i],
@@ -143,16 +164,13 @@ const KNOWN_LOCATIONS: [string, RegExp][] = [
   ["Charlotte", /\bcharlotte\b/i],
   ["Portland", /\bportland\b/i],
   ["Phoenix", /\bphoenix\b/i],
-  /* US states (fallback) */
   ["Texas", /\btexas\b/i],
   ["Florida", /\bflorida\b/i],
   ["California", /\bcalifornia\b/i],
-  /* Other international */
   ["London", /\blondon\b/i],
   ["Toronto", /\btoronto\b/i],
 ];
 
-/* Developer / brand names that double as location qualifiers */
 const BRAND_QUALIFIERS: [string, RegExp][] = [
   ["Emaar", /\bemaar\b/i],
   ["Bahria Town", /\bbahria(?:\s+town)?\b/i],
@@ -161,16 +179,11 @@ const BRAND_QUALIFIERS: [string, RegExp][] = [
 
 function detectLocation(text: string, isShortReply: boolean): string | null {
   const found: string[] = [];
-
-  /* 1. Match known cities / areas */
   for (const [name, re] of KNOWN_LOCATIONS) {
     if (re.test(text) && !found.includes(name)) found.push(name);
   }
-
-  /* 2. Append brand qualifiers that aren't already the main city */
   for (const [brand, re] of BRAND_QUALIFIERS) {
     if (re.test(text) && !found.includes(brand)) {
-      /* If we already have a city, nest the brand: "Karachi (Emaar)" */
       if (found.length > 0) {
         const main = found[0];
         found[0] = `${main} (${brand})`;
@@ -179,53 +192,26 @@ function detectLocation(text: string, isShortReply: boolean): string | null {
       }
     }
   }
-
   if (found.length > 0) return found.join(", ");
 
-  /* 3. Natural phrase: "in [Location]", "at [Location]", "city is [Location]" */
   const phraseMatch = text.match(
-    /\b(?:in|at|near|around|city\s+is|location\s*(?:is)?)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+){0,2})/
+    /\b(?:in|at|near|around|city\s*(?:is)?|location\s*(?:is)?)\s+([A-Za-z]+(?:\s[A-Za-z]+){0,2})/i
   );
-  if (phraseMatch) return phraseMatch[1];
-
-  /* 4. Short reply heuristic: if the bot just asked for a city and the user
-        sends a 1–3 word reply, treat the whole thing as a location. */
-  if (isShortReply) {
-    const words = text.trim().split(/\s+/);
-    if (words.length <= 3 && words.length >= 1 && /^[A-Za-z]/.test(words[0])) {
-      return text
-        .trim()
-        .replace(/\b\w/g, (c) => c.toUpperCase());
-    }
+  if (phraseMatch) {
+    return phraseMatch[1].replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  if (isShortReply) {
+    const clean = text.trim();
+    const words = clean.split(/\s+/);
+    if (words.length <= 3 && words.length >= 1 && /^[A-Za-z]/.test(words[0])) {
+      return clean.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
   return null;
 }
 
-/* --- Emaar special case: also set property type if not already set -- */
-function applyEmaarHeuristic(
-  text: string,
-  lead: LeadData
-): { location: string | null; propertyType: string | null } {
-  const t = text.toLowerCase();
-  let location: string | null = null;
-  let propertyType: string | null = null;
-
-  if (/\bemaar\b/i.test(t)) {
-    /* Try to pair Emaar with a city already detected */
-    const city = detectLocation(text.replace(/emaar/i, "").trim(), false);
-    location = city ? `${city} (Emaar)` : "Emaar";
-    if (lead.propertyType === "—") {
-      propertyType = "Luxury Apartment / Villa";
-    }
-  }
-  return { location, propertyType };
-}
-
-/* --- Budget (USD + PKR + Crore / Lakh) ----------------------------- */
-
 function detectBudget(text: string): string | null {
-  /* $850k, $1.2M, $500,000 */
   const usd = text.match(
     /\$[\d,]+(?:\.\d+)?\s*[kKmM]?|\b\d[\d,]*(?:\.\d+)?\s*(?:million|mil)\b/i
   );
@@ -233,33 +219,29 @@ function detectBudget(text: string): string | null {
     let raw = usd[0];
     if (/[kK]\s*$/.test(raw)) {
       const n = parseFloat(raw.replace(/[\$,kK\s]/g, ""));
-      return "$" + (n * 1_000).toLocaleString();
+      return "$" + (n * 1000).toLocaleString();
     }
     if (/[mM]\s*$/.test(raw)) {
       const n = parseFloat(raw.replace(/[\$,mM\s]/g, ""));
-      return "$" + (n * 1_000_000).toLocaleString();
+      return "$" + (n * 1000000).toLocaleString();
     }
     if (/million|mil/i.test(raw)) {
       const n = parseFloat(raw.replace(/[^0-9.]/g, ""));
-      return "$" + (n * 1_000_000).toLocaleString();
+      return "$" + (n * 1000000).toLocaleString();
     }
     if (!raw.startsWith("$")) raw = "$" + raw;
     return raw;
   }
 
-  /* 5 crore, 80 lakh, 250k, 500K, etc. */
-  const local = text.match(
-    /\b([\d,.]+)\s*(crore|cr|lakh|lac|k)\b/i
-  );
+  const local = text.match(/\b([\d,.]+)\s*(crore|cr|lakh|lac|k)\b/i);
   if (local) {
     const n = parseFloat(local[1].replace(/,/g, ""));
     const unit = local[2].toLowerCase();
-    if (unit === "crore" || unit === "cr") return `PKR ${(n * 10_000_000).toLocaleString()}`;
-    if (unit === "lakh" || unit === "lac") return `PKR ${(n * 100_000).toLocaleString()}`;
-    if (unit === "k") return "$" + (n * 1_000).toLocaleString();
+    if (unit === "crore" || unit === "cr") return `PKR ${n} Crore`;
+    if (unit === "lakh" || unit === "lac") return `PKR ${n} Lakh`;
+    if (unit === "k") return "$" + (n * 1000).toLocaleString();
   }
 
-  /* "pkr 50000000", "usd 850000" */
   const prefixed = text.match(/\b(pkr|usd|rs\.?)\s*([\d,]+(?:\.\d+)?)/i);
   if (prefixed) {
     const cur = /pkr|rs/i.test(prefixed[1]) ? "PKR" : "$";
@@ -267,7 +249,6 @@ function detectBudget(text: string): string | null {
     return `${cur} ${n.toLocaleString()}`;
   }
 
-  /* Bare large number when context seems budget-related */
   if (/budget|price|cost|afford|range|under|below|around|max/i.test(text)) {
     const bare = text.match(/\b(\d[\d,]{2,})\b/);
     if (bare) {
@@ -275,15 +256,12 @@ function detectBudget(text: string): string | null {
       if (n >= 1000) return "$" + n.toLocaleString();
     }
   }
-
   return null;
 }
 
-/* --- Contact ------------------------------------------------------- */
-
 function detectPhone(text: string): string | null {
   const m = text.match(
-    /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3,4}[-.\s]?\d{4}|\b\d{3}[-.\s]\d{4}\b/
+    /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3,4}[-.\s]?\d{4}|\b\d{3}[-.\s]\d{4}\b|\b03\d{2}[-.\s]?\d{7}\b/
   );
   return m ? m[0] : null;
 }
@@ -294,102 +272,7 @@ function detectEmail(text: string): string | null {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Conversational state machine (anti-loop, context-aware)            */
-/* ------------------------------------------------------------------ */
-
-/** Count how many lead fields are filled (not "—" / "Pending"). */
-function filledCount(lead: LeadData): number {
-  let n = 0;
-  if (lead.intent !== "Pending") n++;
-  if (lead.propertyType !== "—") n++;
-  if (lead.location !== "—") n++;
-  if (lead.budget !== "—") n++;
-  if (lead.contact !== "—") n++;
-  return n;
-}
-
-interface AIResult {
-  text: string;
-  nextStep: ConvoStep;
-}
-
-function getAIResponse(
-  lead: LeadData,
-  step: ConvoStep,
-  userTurns: number,
-  lastAiText: string,
-  justFilledFields: string[],
-): AIResult {
-  /* ---------- helpers ---------- */
-  const filled = filledCount(lead);
-  const missingCore: string[] = [];
-  if (lead.location === "—") missingCore.push("preferred city or area");
-  if (lead.budget === "—") missingCore.push("budget range");
-  if (lead.propertyType === "—") missingCore.push("type of property");
-
-  const needContact = lead.contact === "—";
-  const acknowledge = justFilledFields
-    .map((f) => {
-      if (f === "location") return `**${lead.location}**`;
-      if (f === "budget") return `budget of **${lead.budget}**`;
-      if (f === "propertyType") return `**${lead.propertyType}**`;
-      if (f === "intent") return `looking to **${lead.intent}**`;
-      return null;
-    })
-    .filter(Boolean);
-
-  const ack = acknowledge.length > 0 ? `Got it — ${acknowledge.join(", ")}! ` : "";
-
-  /* ---------- qualified (contact captured) ---------- */
-  if (lead.contact !== "—") {
-    return {
-      text: `${ack}Perfect! I've locked in your preferences and forwarded your **VIP profile** to our senior agent. Expect a call or WhatsApp message shortly! 🏡✨`,
-      nextStep: "qualified",
-    };
-  }
-
-  /* ---------- enough info OR 3+ turns → ask for contact ---------- */
-  if (filled >= 3 || userTurns >= 3) {
-    const summary: string[] = [];
-    if (lead.propertyType !== "—") summary.push(`a **${lead.propertyType}**`);
-    if (lead.location !== "—") summary.push(`in **${lead.location}**`);
-    if (lead.budget !== "—") summary.push(`around **${lead.budget}**`);
-
-    const variants = [
-      `${ack}Excellent! ${summary.length > 0 ? `I've noted ${summary.join(", ")}. ` : ""}To send you our curated VIP list and schedule a **private viewing**, could you share your **phone number** or **email**?`,
-      `${ack}Wonderful — ${summary.length > 0 ? `${summary.join(", ")} is a fantastic choice. ` : ""}I just need your **phone number** to connect you with our top agent!`,
-      `${ack}Great profile so far! ${summary.length > 0 ? `(${summary.join(", ")}) ` : ""}Please share your **contact number** so our senior agent can reach out with exclusive listings. 📲`,
-    ];
-    const text = pickNonRepeat(variants, lastAiText);
-    return { text, nextStep: "contact" };
-  }
-
-  /* ---------- greeting / early turns → gather details ---------- */
-  if (missingCore.length === 0) {
-    /* All core filled but no contact yet */
-    const text = `${ack}I've got everything I need. Just drop your **phone number** or **email** and I'll connect you with a VIP agent right away!`;
-    return { text, nextStep: "contact" };
-  }
-
-  /* Some core fields missing */
-  const ask = missingCore.slice(0, 2).join("** and **");
-  const variants = [
-    `${ack}To find your perfect match, could you share your **${ask}**?`,
-    `${ack}Almost there! I just need your **${ask}** to pull up the best options for you.`,
-    `${ack}Thanks for the details! What's your **${ask}**?`,
-  ];
-  const text = pickNonRepeat(variants, lastAiText);
-  return { text, nextStep: step === "greeting" ? "details" : step };
-}
-
-/** Pick a response that differs from the last AI message to prevent loops. */
-function pickNonRepeat(variants: string[], lastAiText: string): string {
-  const different = variants.filter((v) => v !== lastAiText);
-  return different.length > 0 ? different[0] : variants[0];
-}
-
-/* ------------------------------------------------------------------ */
-/*  Progress calculation                                               */
+/*  Progress Calculation                                              */
 /* ------------------------------------------------------------------ */
 
 function calcProgress(lead: LeadData): number {
@@ -410,7 +293,145 @@ function tempLabel(progress: number): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Simple Markdown-ish bold renderer                                  */
+/*  Anti-Loop Conversational State Machine                             */
+/* ------------------------------------------------------------------ */
+
+interface AIResult {
+  text: string;
+  nextStep: ConvoStep;
+}
+
+function pickDifferent(candidates: string[], lastText: string): string {
+  const nonRepeat = candidates.filter((c) => c !== lastText);
+  if (nonRepeat.length > 0) {
+    return nonRepeat[Math.floor(Math.random() * nonRepeat.length)];
+  }
+  return candidates[0];
+}
+
+function generateAIResponse(
+  lead: LeadData,
+  userTurns: number,
+  lastAiText: string,
+  justFilled: string[]
+): AIResult {
+  const hasContact = lead.contact !== "—";
+  const hasLocation = lead.location !== "—";
+  const hasBudget = lead.budget !== "—";
+  const hasProperty = lead.propertyType !== "—";
+
+  /* Acknowledge newly extracted parameters */
+  const ackParts: string[] = [];
+  if (justFilled.includes("location") && hasLocation) {
+    ackParts.push(`looking in **${lead.location}**`);
+  }
+  if (justFilled.includes("propertyType") && hasProperty) {
+    ackParts.push(`a **${lead.propertyType}**`);
+  }
+  if (justFilled.includes("budget") && hasBudget) {
+    ackParts.push(`budget of **${lead.budget}**`);
+  }
+  if (justFilled.includes("contact") && hasContact) {
+    ackParts.push(`your contact number (**${lead.contact}**)`);
+  }
+
+  const ack =
+    ackParts.length > 0
+      ? `Got it — ${ackParts.join(", ")}! `
+      : justFilled.length > 0
+      ? "Noted! "
+      : "";
+
+  /* CASE 1: FULLY QUALIFIED (Contact + at least Location or Budget or 3+ turns) */
+  if (hasContact && (hasLocation || hasBudget || userTurns >= 2)) {
+    const summaryList: string[] = [];
+    if (hasProperty) summaryList.push(`a **${lead.propertyType}**`);
+    if (hasLocation) summaryList.push(`in **${lead.location}**`);
+    if (hasBudget) summaryList.push(`with a budget around **${lead.budget}**`);
+
+    const summaryText = summaryList.length > 0 ? ` for ${summaryList.join(" ")}` : "";
+    const options = [
+      `${ack}Perfect! I've locked in your preferences${summaryText} and forwarded your **VIP profile** to our senior agent. Expect a call or WhatsApp on **${lead.contact}** shortly! 🏡✨`,
+      `${ack}All set! Your VIP concierge request${summaryText} has been routed directly to our luxury team. We will reach out to you on **${lead.contact}** within the hour! 🌟`,
+      `${ack}Excellent! Your property brief${summaryText} is confirmed and synced to our CRM. Our senior advisor will contact you on **${lead.contact}** with off-market listings! 🔑`,
+    ];
+    return {
+      text: pickDifferent(options, lastAiText),
+      nextStep: "qualified",
+    };
+  }
+
+  /* CASE 2: Contact provided, but Location/Budget/Property still missing */
+  if (hasContact && !hasLocation && !hasBudget) {
+    const options = [
+      `${ack}To ensure our senior agent prepares the exact listings for your VIP viewing, which **city/area** and **property type** (e.g. Villa, Apartment, Commercial) are you interested in?`,
+      `${ack}Which **city/area** and **property type** should we prepare for your private walkthrough?`,
+      `${ack}Could you let me know your preferred **city** and estimated **budget range**?`,
+    ];
+    return {
+      text: pickDifferent(options, lastAiText),
+      nextStep: "details",
+    };
+  }
+
+  /* CASE 3: Has Location, Budget, or Property, but Contact is missing */
+  if ((hasLocation && hasBudget) || (hasLocation && hasProperty) || userTurns >= 3) {
+    const summaryList: string[] = [];
+    if (hasProperty) summaryList.push(`**${lead.propertyType}**`);
+    if (hasLocation) summaryList.push(`in **${lead.location}**`);
+    if (hasBudget) summaryList.push(`under **${lead.budget}**`);
+
+    const summary = summaryList.length > 0 ? ` for ${summaryList.join(" ")}` : "";
+    const options = [
+      `${ack}Outstanding choice${summary}! To send you the curated VIP property portfolio and schedule a private tour, what is your **name** and **phone number**?`,
+      `${ack}We have exclusive listings${summary}! Could you share your **phone number** or **email** so our senior specialist can send floor plans directly to you?`,
+      `${ack}I've pulled up prime matches${summary}. Please share your **contact number** to lock in your VIP access! 📲`,
+    ];
+    return {
+      text: pickDifferent(options, lastAiText),
+      nextStep: "contact",
+    };
+  }
+
+  /* CASE 4: Missing Location specifically */
+  if (!hasLocation) {
+    const options = [
+      `${ack}Which **city or neighborhood** are you targeting (e.g., Karachi, Dubai, Miami, Austin)?`,
+      `${ack}What is your preferred **location or area** for this property?`,
+      `${ack}Great choice! Could you share your preferred **city/area** and estimated **budget**?`,
+    ];
+    return {
+      text: pickDifferent(options, lastAiText),
+      nextStep: "details",
+    };
+  }
+
+  /* CASE 5: Missing Budget specifically */
+  if (!hasBudget) {
+    const options = [
+      `${ack}What is your estimated **budget range** (in USD, PKR, or Crore)?`,
+      `${ack}Could you let me know your approximate **target budget** so I can pull the right tier of properties?`,
+      `${ack}What price range or maximum **budget** do you have in mind?`,
+    ];
+    return {
+      text: pickDifferent(options, lastAiText),
+      nextStep: "details",
+    };
+  }
+
+  /* DEFAULT FALLBACK */
+  const fallbackOptions = [
+    `${ack}Could you share your preferred **location**, **budget**, or **contact number** so I can best assist you?`,
+    `${ack}To tailor our luxury listings, please tell me your target **neighborhood** or approximate **budget**.`,
+  ];
+  return {
+    text: pickDifferent(fallbackOptions, lastAiText),
+    nextStep: "details",
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Bold Text Renderer                                                */
 /* ------------------------------------------------------------------ */
 
 function renderBold(text: string) {
@@ -435,7 +456,6 @@ export default function EstateLead() {
   const [messages, setMessages] = useState<ChatMessage[]>([GREETING_MSG]);
   const [input, setInput] = useState("");
   const [lead, setLead] = useState<LeadData>(INITIAL_LEAD);
-  const [step, setStep] = useState<ConvoStep>("greeting");
   const [typing, setTyping] = useState(false);
   const [progress, setProgress] = useState(0);
   const [toast, setToast] = useState(false);
@@ -443,28 +463,27 @@ export default function EstateLead() {
   const [highlightField, setHighlightField] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [timestamp, setTimestamp] = useState("—");
-  const [userTurns, setUserTurns] = useState(0);
-  const [lastAiText, setLastAiText] = useState("");
+
+  /* Mutable state refs guarantee zero stale closures */
+  const leadRef = useRef<LeadData>(INITIAL_LEAD);
+  const userTurnsRef = useRef(0);
+  const lastAiTextRef = useRef("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  /* keep timestamp in sync (avoids hydration mismatch from Date) */
   useEffect(() => {
     setTimestamp(new Date().toISOString());
   }, [messages]);
 
-  /* auto-scroll */
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  /* progress tracker */
   useEffect(() => {
     setProgress(calcProgress(lead));
   }, [lead]);
 
-  /* highlight reset */
   useEffect(() => {
     if (highlightField) {
       const t = setTimeout(() => setHighlightField(null), 1200);
@@ -472,7 +491,6 @@ export default function EstateLead() {
     }
   }, [highlightField]);
 
-  /* toast auto-hide */
   useEffect(() => {
     if (toast) {
       requestAnimationFrame(() => setToastVisible(true));
@@ -484,142 +502,140 @@ export default function EstateLead() {
     }
   }, [toast]);
 
-  const handleSend = useCallback(
-    (text?: string) => {
-      const msg = (text ?? input).trim();
-      if (!msg) return;
+  function handleSend(text?: string) {
+    const msg = (text ?? input).trim();
+    if (!msg || typing) return;
 
-      const userMsg: ChatMessage = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        text: msg,
-      };
-      setMessages((prev) => [...prev, userMsg]);
-      if (!text) setInput("");
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: msg,
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    if (!text) setInput("");
 
-      const turnNum = userTurns + 1;
-      setUserTurns(turnNum);
+    const currentLead = leadRef.current;
+    const turnNum = userTurnsRef.current + 1;
+    userTurnsRef.current = turnNum;
 
-      /* -- determine if this is a short reply to a location question -- */
-      const isShortReply =
-        msg.trim().split(/\s+/).length <= 3 &&
-        (step === "details" || step === "greeting") &&
-        lead.location === "—";
+    const isShortReply =
+      msg.trim().split(/\s+/).length <= 3 && currentLead.location === "—";
 
-      /* -- extract data -- */
-      const newLead = { ...lead };
-      const justFilled: string[] = [];
+    /* Lead Extraction */
+    const newLead: LeadData = { ...currentLead };
+    const justFilled: string[] = [];
 
-      const intent = detectIntent(msg);
-      if (intent && newLead.intent === "Pending") {
-        newLead.intent = intent;
-        justFilled.push("intent");
-      }
-      /* Default intent to Buy for viewing / property / price mentions */
-      if (newLead.intent === "Pending" && /\b(book|viewing|property|price|villa|house|apartment|plot|condo)\b/i.test(msg)) {
-        newLead.intent = "Buy";
-        justFilled.push("intent");
-      }
+    const intent = detectIntent(msg);
+    if (intent && newLead.intent === "Pending") {
+      newLead.intent = intent;
+      justFilled.push("intent");
+    }
+    if (
+      newLead.intent === "Pending" &&
+      /\b(book|viewing|property|price|villa|house|apartment|plot|condo|commercial)\b/i.test(
+        msg
+      )
+    ) {
+      newLead.intent = "Buy";
+      justFilled.push("intent");
+    }
 
-      const pt = detectPropertyType(msg);
-      if (pt && newLead.propertyType === "—") {
-        newLead.propertyType = pt;
+    const pt = detectPropertyType(msg);
+    if (pt && newLead.propertyType === "—") {
+      newLead.propertyType = pt;
+      justFilled.push("propertyType");
+    }
+
+    const loc = detectLocation(msg, isShortReply);
+    if (loc && newLead.location === "—") {
+      newLead.location = loc;
+      justFilled.push("location");
+      if (newLead.propertyType === "—" && /\bemaar\b/i.test(msg)) {
+        newLead.propertyType = "Luxury Apartment / Villa";
         justFilled.push("propertyType");
       }
+    }
 
-      /* Emaar heuristic */
-      if (/\bemaar\b/i.test(msg)) {
-        const emaar = applyEmaarHeuristic(msg, newLead);
-        if (emaar.location && newLead.location === "—") {
-          newLead.location = emaar.location;
-          justFilled.push("location");
-        }
-        if (emaar.propertyType && newLead.propertyType === "—") {
-          newLead.propertyType = emaar.propertyType;
-          justFilled.push("propertyType");
-        }
+    const bud = detectBudget(msg);
+    if (bud && newLead.budget === "—") {
+      newLead.budget = bud;
+      justFilled.push("budget");
+    }
+
+    const phone = detectPhone(msg);
+    const email = detectEmail(msg);
+    if ((phone || email) && newLead.contact === "—") {
+      newLead.contact = phone ?? email ?? "—";
+      justFilled.push("contact");
+    }
+
+    newLead.temperature = tempLabel(calcProgress(newLead));
+
+    /* Commit to ref and React state */
+    leadRef.current = newLead;
+    setLead(newLead);
+    if (justFilled.length > 0) {
+      setHighlightField(justFilled[justFilled.length - 1]);
+    }
+
+    /* AI Response Animation */
+    setTyping(true);
+    const prevContact = currentLead.contact;
+    const savedLastAi = lastAiTextRef.current;
+
+    setTimeout(() => {
+      const aiResult = generateAIResponse(
+        newLead,
+        turnNum,
+        savedLastAi,
+        justFilled
+      );
+      lastAiTextRef.current = aiResult.text;
+
+      const aiMsg: ChatMessage = {
+        id: `ai-${Date.now()}`,
+        role: "ai",
+        text: aiResult.text,
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+      setTyping(false);
+
+      /* Trigger webhook toast when contact is captured */
+      if (newLead.contact !== "—" && prevContact === "—") {
+        setToast(true);
+
+        /* Asynchronous webhook payload dispatch */
+        fetch("/api/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            timestamp: new Date().toISOString(),
+            source: "EstateLead AI",
+            lead: newLead,
+          }),
+        }).catch(() => {
+          /* Demo mode resilience */
+        });
       }
 
-      /* Normal location detection (skip if Emaar already set it) */
-      if (newLead.location === "—") {
-        const loc = detectLocation(msg, isShortReply);
-        if (loc) {
-          newLead.location = loc;
-          justFilled.push("location");
-        }
-      }
+      inputRef.current?.focus();
+    }, 600 + Math.random() * 300);
+  }
 
-      const bud = detectBudget(msg);
-      if (bud && newLead.budget === "—") {
-        newLead.budget = bud;
-        justFilled.push("budget");
-      }
-
-      const phone = detectPhone(msg);
-      const email = detectEmail(msg);
-      if ((phone || email) && newLead.contact === "—") {
-        newLead.contact = phone ?? email ?? "—";
-        justFilled.push("contact");
-      }
-
-      newLead.temperature = tempLabel(calcProgress(newLead));
-      setLead(newLead);
-      if (justFilled.length > 0) setHighlightField(justFilled[justFilled.length - 1]);
-
-      /* -- AI response with typing delay -- */
-      setTyping(true);
-      setTimeout(() => {
-        const { text: aiText, nextStep } = getAIResponse(newLead, step, turnNum, lastAiText, justFilled);
-        setStep(nextStep);
-        setLastAiText(aiText);
-        const aiMsg: ChatMessage = {
-          id: `ai-${Date.now()}`,
-          role: "ai",
-          text: aiText,
-        };
-        setMessages((prev) => [...prev, aiMsg]);
-        setTyping(false);
-
-        /* fire toast when contact captured */
-        if (newLead.contact !== "—" && lead.contact === "—") {
-          setToast(true);
-        }
-
-        /* Also attempt webhook (non-blocking, won't break demo if route missing) */
-        if (newLead.contact !== "—" && lead.contact === "—") {
-          fetch("/api/webhook", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              timestamp,
-              source: "EstateLead AI",
-              lead: newLead,
-            }),
-          }).catch(() => {
-            /* silently ignore – demo mode */
-          });
-        }
-
-        inputRef.current?.focus();
-      }, 600 + Math.random() * 400);
-    },
-    [input, lead, step, userTurns, lastAiText, timestamp]
-  );
-
-  const handleReset = () => {
+  function handleReset() {
     setMessages([GREETING_MSG]);
     setInput("");
     setLead(INITIAL_LEAD);
-    setStep("greeting");
     setTyping(false);
     setProgress(0);
     setToast(false);
     setToastVisible(false);
     setHighlightField(null);
     setCopied(false);
-    setUserTurns(0);
-    setLastAiText("");
-  };
+    leadRef.current = INITIAL_LEAD;
+    userTurnsRef.current = 0;
+    lastAiTextRef.current = "";
+  }
 
   const webhookPayload = JSON.stringify(
     {
@@ -647,10 +663,6 @@ export default function EstateLead() {
     });
   };
 
-  /* ---------------------------------------------------------------- */
-  /*  Field highlight helper                                           */
-  /* ---------------------------------------------------------------- */
-
   const fieldClass = (field: string) =>
     `transition-all duration-500 ${
       highlightField === field
@@ -658,19 +670,15 @@ export default function EstateLead() {
         : ""
     }`;
 
-  /* ---------------------------------------------------------------- */
-  /*  Render                                                           */
-  /* ---------------------------------------------------------------- */
-
   return (
     <div className="flex flex-1 flex-col min-h-screen bg-slate-950 text-slate-200 font-sans relative overflow-hidden">
-      {/* ===== ambient glow ===== */}
+      {/* Ambient decorative glow */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <div className="absolute -top-40 -left-40 h-[500px] w-[500px] rounded-full bg-emerald-500/10 blur-[120px]" />
         <div className="absolute -bottom-40 -right-40 h-[500px] w-[500px] rounded-full bg-indigo-500/10 blur-[120px]" />
       </div>
 
-      {/* ===== HEADER ===== */}
+      {/* Top Header Bar */}
       <header className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/60 bg-slate-900/70 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-indigo-500 shadow-lg shadow-emerald-500/20">
@@ -701,11 +709,10 @@ export default function EstateLead() {
         </div>
       </header>
 
-      {/* ===== MAIN GRID ===== */}
+      {/* Main Grid Layout */}
       <main className="relative z-10 flex flex-1 flex-col gap-4 overflow-hidden p-4 lg:grid lg:grid-cols-12 lg:gap-5 lg:p-5">
-        {/* ---------- LEFT COLUMN : CHAT ---------- */}
+        {/* Left Column: Interactive Chat (7 cols) */}
         <section className="flex flex-col overflow-hidden rounded-2xl border border-slate-800/60 bg-slate-900/80 backdrop-blur-xl lg:col-span-7">
-          {/* chat header */}
           <div className="flex items-center gap-3 border-b border-slate-800/50 px-5 py-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20">
               <MessageSquare className="h-4 w-4 text-indigo-400" />
@@ -724,7 +731,7 @@ export default function EstateLead() {
             </span>
           </div>
 
-          {/* quick replies */}
+          {/* Quick-reply starters */}
           <div className="flex flex-wrap gap-2 border-b border-slate-800/30 px-4 py-2.5">
             {QUICK_REPLIES.map((qr) => (
               <button
@@ -738,12 +745,14 @@ export default function EstateLead() {
             ))}
           </div>
 
-          {/* messages */}
+          {/* Message List */}
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-700">
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex ${
+                  m.role === "user" ? "justify-end" : "justify-start"
+                }`}
               >
                 {m.role === "ai" && (
                   <div className="mr-2 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-indigo-500">
@@ -762,7 +771,6 @@ export default function EstateLead() {
               </div>
             ))}
 
-            {/* typing indicator */}
             {typing && (
               <div className="flex items-start gap-2">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-indigo-500">
@@ -778,7 +786,7 @@ export default function EstateLead() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* input bar */}
+          {/* Chat Input Bar */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -790,7 +798,7 @@ export default function EstateLead() {
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type your message..."
+              placeholder="Type your property requirements..."
               disabled={typing}
               className="flex-1 rounded-xl border border-slate-700/50 bg-slate-800/60 px-4 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-indigo-500/50 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 disabled:opacity-40"
             />
@@ -804,9 +812,9 @@ export default function EstateLead() {
           </form>
         </section>
 
-        {/* ---------- RIGHT COLUMN : CRM PANEL ---------- */}
+        {/* Right Column: CRM Payload & Lead Inspector (5 cols) */}
         <aside className="flex flex-col gap-4 overflow-y-auto lg:col-span-5">
-          {/* CARD 1 — Qualification */}
+          {/* Card 1: Lead Qualification Status */}
           <div className="rounded-2xl border border-slate-800/60 bg-slate-900/80 p-5 backdrop-blur-xl">
             <div className="mb-3 flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-emerald-400" />
@@ -825,15 +833,15 @@ export default function EstateLead() {
               {progress >= 100 ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-emerald-400">
                   <CheckCircle2 className="h-3 w-3" />
-                  Qualified
+                  100% Qualified
                 </span>
               ) : (
-                <span className="text-slate-500">Gathering info…</span>
+                <span className="text-slate-500">Gathering information…</span>
               )}
             </div>
           </div>
 
-          {/* CARD 2 — Extracted Data */}
+          {/* Card 2: Real-Time Extracted Lead Data */}
           <div className="rounded-2xl border border-slate-800/60 bg-slate-900/80 p-5 backdrop-blur-xl">
             <div className="mb-4 flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-indigo-400" />
@@ -844,11 +852,36 @@ export default function EstateLead() {
             <div className="space-y-2.5">
               {(
                 [
-                  ["intent", "Intent", <ShieldCheck key="i" className="h-4 w-4 text-emerald-400" />, lead.intent],
-                  ["propertyType", "Property Type", <Building2 key="p" className="h-4 w-4 text-indigo-400" />, lead.propertyType],
-                  ["location", "Location", <MapPin key="l" className="h-4 w-4 text-rose-400" />, lead.location],
-                  ["budget", "Budget", <DollarSign key="b" className="h-4 w-4 text-amber-400" />, lead.budget],
-                  ["contact", "Contact", <Phone key="c" className="h-4 w-4 text-sky-400" />, lead.contact],
+                  [
+                    "intent",
+                    "Intent",
+                    <ShieldCheck key="i" className="h-4 w-4 text-emerald-400" />,
+                    lead.intent,
+                  ],
+                  [
+                    "propertyType",
+                    "Property Type",
+                    <Building2 key="p" className="h-4 w-4 text-indigo-400" />,
+                    lead.propertyType,
+                  ],
+                  [
+                    "location",
+                    "Location",
+                    <MapPin key="l" className="h-4 w-4 text-rose-400" />,
+                    lead.location,
+                  ],
+                  [
+                    "budget",
+                    "Budget",
+                    <DollarSign key="b" className="h-4 w-4 text-amber-400" />,
+                    lead.budget,
+                  ],
+                  [
+                    "contact",
+                    "Client Phone / Contact",
+                    <Phone key="c" className="h-4 w-4 text-sky-400" />,
+                    lead.contact,
+                  ],
                   [
                     "temperature",
                     "Lead Temperature",
@@ -859,7 +892,9 @@ export default function EstateLead() {
               ).map(([field, label, icon, value]) => (
                 <div
                   key={field}
-                  className={`flex items-center justify-between rounded-xl bg-slate-800/50 px-3.5 py-2.5 ${fieldClass(field)}`}
+                  className={`flex items-center justify-between rounded-xl bg-slate-800/50 px-3.5 py-2.5 ${fieldClass(
+                    field
+                  )}`}
                 >
                   <div className="flex items-center gap-2 text-xs text-slate-400">
                     {icon}
@@ -870,8 +905,8 @@ export default function EstateLead() {
                       value === "—" || value === "Pending" || value === "Waiting"
                         ? "text-slate-500"
                         : value === "🔥 Hot VIP Lead"
-                          ? "text-orange-400"
-                          : "text-white"
+                        ? "text-orange-400"
+                        : "text-white"
                     }`}
                   >
                     {value}
@@ -881,13 +916,13 @@ export default function EstateLead() {
             </div>
           </div>
 
-          {/* CARD 3 — Webhook Payload */}
+          {/* Card 3: Webhook JSON Payload */}
           <div className="rounded-2xl border border-slate-800/60 bg-slate-900/80 p-5 backdrop-blur-xl">
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <User className="h-4 w-4 text-emerald-400" />
                 <h2 className="text-sm font-semibold text-white">
-                  n8n / Google Sheets Webhook Payload
+                  Live n8n / Google Sheets Webhook Payload
                 </h2>
               </div>
               <button
@@ -908,7 +943,7 @@ export default function EstateLead() {
         </aside>
       </main>
 
-      {/* ===== TOAST ===== */}
+      {/* Webhook Confirmation Toast */}
       {toast && (
         <div
           className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-emerald-500/30 bg-slate-900/95 px-5 py-3.5 shadow-2xl shadow-emerald-500/10 backdrop-blur-xl transition-all duration-300 ${
