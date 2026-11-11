@@ -69,83 +69,217 @@ const GREETING_MSG: ChatMessage = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  NLP-lite helpers                                                   */
+/*  NLP-lite helpers (global + Pakistani + US real estate)              */
 /* ------------------------------------------------------------------ */
 
 function detectIntent(text: string): string | null {
   const t = text.toLowerCase();
-  if (/\b(buy|purchase|looking for|find me)\b/.test(t)) return "Buy";
-  if (/\b(rent|lease|renting)\b/.test(t)) return "Rent";
-  if (/\b(invest|investment|roi|flip)\b/.test(t)) return "Invest";
+  if (/\b(buy|purchase|looking\s+for|find\s+me|book\s+a\s+viewing|viewing|price)\b/.test(t)) return "Buy";
+  if (/\b(rent|lease|renting|tenancy)\b/.test(t)) return "Rent";
+  if (/\b(invest|investment|roi|flip|yield|capital\s+gain)\b/.test(t)) return "Invest";
   return null;
 }
+
+const KNOWN_PROPERTY_KEYWORDS = [
+  "villa", "house", "apartment", "condo", "flat", "penthouse", "townhouse",
+  "studio", "duplex", "office", "warehouse", "bungalow", "shop", "plot",
+  "commercial", "retail space",
+] as const;
 
 function detectPropertyType(text: string): string | null {
   const t = text.toLowerCase();
-  const match = t.match(
-    /(\d[\s-]?bed(?:room)?[\s-]?(?:villa|house|apartment|condo|flat|penthouse|townhouse)?|villa|house|apartment|condo|commercial\s*(?:propert(?:y|ies))?|penthouse|townhouse|flat|studio|duplex|office|warehouse|retail\s*space)/
+  /* "3 bed villa", "2-bedroom apartment", etc. */
+  const bedroomMatch = t.match(
+    /(\d[\s-]?bed(?:room)?[\s-]?(?:villa|house|apartment|condo|flat|penthouse|townhouse|bungalow)?)/
   );
-  if (match) {
-    return match[0]
-      .replace(/\b\w/g, (c) => c.toUpperCase())
-      .replace(/-/g, " ");
+  if (bedroomMatch) {
+    return bedroomMatch[0].replace(/\b\w/g, (c) => c.toUpperCase()).replace(/-/g, " ");
+  }
+  /* standalone property keywords */
+  for (const kw of KNOWN_PROPERTY_KEYWORDS) {
+    const re = new RegExp(`\\b${kw}(?:s|\\s+propert(?:y|ies))?\\b`, "i");
+    if (re.test(t)) return kw.replace(/\b\w/g, (c) => c.toUpperCase());
   }
   return null;
 }
 
-function detectLocation(text: string): string | null {
-  const cities = [
-    "Miami",
-    "Austin",
-    "New York",
-    "Los Angeles",
-    "Chicago",
-    "Houston",
-    "Phoenix",
-    "San Diego",
-    "Dallas",
-    "Denver",
-    "Seattle",
-    "Boston",
-    "Atlanta",
-    "San Francisco",
-    "Tampa",
-    "Orlando",
-    "Las Vegas",
-    "Nashville",
-    "Charlotte",
-    "Portland",
-    "Dubai",
-    "London",
-    "Toronto",
-  ];
-  const t = text.toLowerCase();
-  for (const city of cities) {
-    if (t.includes(city.toLowerCase())) return city;
+/* --- Location ---------------------------------------------------- */
+
+const KNOWN_LOCATIONS: [string, RegExp][] = [
+  /* Pakistan / South Asia */
+  ["Karachi", /\bkarachi\b/i],
+  ["Lahore", /\blahore\b/i],
+  ["Islamabad", /\bislamabad\b/i],
+  ["Rawalpindi", /\brawalpindi\b/i],
+  ["Faisalabad", /\bfaisalabad\b/i],
+  ["Peshawar", /\bpeshawar\b/i],
+  ["Multan", /\bmultan\b/i],
+  ["DHA", /\bdha\b/i],
+  ["Bahria Town", /\bbahria(?:\s+town)?\b/i],
+  ["Clifton", /\bclifton\b/i],
+  ["Gulshan", /\bgulshan\b/i],
+  ["Defence", /\bdefen[cs]e\b/i],
+  /* Middle East */
+  ["Dubai", /\bdubai\b/i],
+  ["Abu Dhabi", /\babu\s*dhabi\b/i],
+  /* North America */
+  ["Miami", /\bmiami\b/i],
+  ["Austin", /\baustin\b/i],
+  ["Dallas", /\bdallas\b/i],
+  ["Houston", /\bhouston\b/i],
+  ["New York", /\bnew\s*york\b/i],
+  ["Los Angeles", /\blos\s*angeles\b/i],
+  ["Chicago", /\bchicago\b/i],
+  ["Seattle", /\bseattle\b/i],
+  ["San Francisco", /\bsan\s*francisco\b/i],
+  ["San Diego", /\bsan\s*diego\b/i],
+  ["Denver", /\bdenver\b/i],
+  ["Boston", /\bboston\b/i],
+  ["Atlanta", /\batlanta\b/i],
+  ["Tampa", /\btampa\b/i],
+  ["Orlando", /\borlando\b/i],
+  ["Las Vegas", /\blas\s*vegas\b/i],
+  ["Nashville", /\bnashville\b/i],
+  ["Charlotte", /\bcharlotte\b/i],
+  ["Portland", /\bportland\b/i],
+  ["Phoenix", /\bphoenix\b/i],
+  /* US states (fallback) */
+  ["Texas", /\btexas\b/i],
+  ["Florida", /\bflorida\b/i],
+  ["California", /\bcalifornia\b/i],
+  /* Other international */
+  ["London", /\blondon\b/i],
+  ["Toronto", /\btoronto\b/i],
+];
+
+/* Developer / brand names that double as location qualifiers */
+const BRAND_QUALIFIERS: [string, RegExp][] = [
+  ["Emaar", /\bemaar\b/i],
+  ["Bahria Town", /\bbahria(?:\s+town)?\b/i],
+  ["DHA", /\bdha\b/i],
+];
+
+function detectLocation(text: string, isShortReply: boolean): string | null {
+  const found: string[] = [];
+
+  /* 1. Match known cities / areas */
+  for (const [name, re] of KNOWN_LOCATIONS) {
+    if (re.test(text) && !found.includes(name)) found.push(name);
   }
-  const areaMatch = text.match(/\bin\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)/);
-  if (areaMatch) return areaMatch[1];
+
+  /* 2. Append brand qualifiers that aren't already the main city */
+  for (const [brand, re] of BRAND_QUALIFIERS) {
+    if (re.test(text) && !found.includes(brand)) {
+      /* If we already have a city, nest the brand: "Karachi (Emaar)" */
+      if (found.length > 0) {
+        const main = found[0];
+        found[0] = `${main} (${brand})`;
+      } else {
+        found.push(brand);
+      }
+    }
+  }
+
+  if (found.length > 0) return found.join(", ");
+
+  /* 3. Natural phrase: "in [Location]", "at [Location]", "city is [Location]" */
+  const phraseMatch = text.match(
+    /\b(?:in|at|near|around|city\s+is|location\s*(?:is)?)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+){0,2})/
+  );
+  if (phraseMatch) return phraseMatch[1];
+
+  /* 4. Short reply heuristic: if the bot just asked for a city and the user
+        sends a 1–3 word reply, treat the whole thing as a location. */
+  if (isShortReply) {
+    const words = text.trim().split(/\s+/);
+    if (words.length <= 3 && words.length >= 1 && /^[A-Za-z]/.test(words[0])) {
+      return text
+        .trim()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+
   return null;
 }
+
+/* --- Emaar special case: also set property type if not already set -- */
+function applyEmaarHeuristic(
+  text: string,
+  lead: LeadData
+): { location: string | null; propertyType: string | null } {
+  const t = text.toLowerCase();
+  let location: string | null = null;
+  let propertyType: string | null = null;
+
+  if (/\bemaar\b/i.test(t)) {
+    /* Try to pair Emaar with a city already detected */
+    const city = detectLocation(text.replace(/emaar/i, "").trim(), false);
+    location = city ? `${city} (Emaar)` : "Emaar";
+    if (lead.propertyType === "—") {
+      propertyType = "Luxury Apartment / Villa";
+    }
+  }
+  return { location, propertyType };
+}
+
+/* --- Budget (USD + PKR + Crore / Lakh) ----------------------------- */
 
 function detectBudget(text: string): string | null {
-  const m = text.match(
-    /\$[\d,]+(?:\.\d+)?[kKmM]?|\b\d{2,3}[kK]\b|\b\d[\d,]*(?:\.\d+)?\s*(?:million|mil|k)\b/i
+  /* $850k, $1.2M, $500,000 */
+  const usd = text.match(
+    /\$[\d,]+(?:\.\d+)?\s*[kKmM]?|\b\d[\d,]*(?:\.\d+)?\s*(?:million|mil)\b/i
   );
-  if (m) {
-    let raw = m[0];
-    if (/\d+[kK]$/.test(raw)) {
-      const num = parseInt(raw.replace(/[kK$,]/g, ""), 10);
-      raw = "$" + (num * 1000).toLocaleString();
-    } else if (/million|mil/i.test(raw)) {
-      const num = parseFloat(raw.replace(/[^0-9.]/g, ""));
-      raw = "$" + (num * 1_000_000).toLocaleString();
+  if (usd) {
+    let raw = usd[0];
+    if (/[kK]\s*$/.test(raw)) {
+      const n = parseFloat(raw.replace(/[\$,kK\s]/g, ""));
+      return "$" + (n * 1_000).toLocaleString();
+    }
+    if (/[mM]\s*$/.test(raw)) {
+      const n = parseFloat(raw.replace(/[\$,mM\s]/g, ""));
+      return "$" + (n * 1_000_000).toLocaleString();
+    }
+    if (/million|mil/i.test(raw)) {
+      const n = parseFloat(raw.replace(/[^0-9.]/g, ""));
+      return "$" + (n * 1_000_000).toLocaleString();
     }
     if (!raw.startsWith("$")) raw = "$" + raw;
     return raw;
   }
+
+  /* 5 crore, 80 lakh, 250k, 500K, etc. */
+  const local = text.match(
+    /\b([\d,.]+)\s*(crore|cr|lakh|lac|k)\b/i
+  );
+  if (local) {
+    const n = parseFloat(local[1].replace(/,/g, ""));
+    const unit = local[2].toLowerCase();
+    if (unit === "crore" || unit === "cr") return `PKR ${(n * 10_000_000).toLocaleString()}`;
+    if (unit === "lakh" || unit === "lac") return `PKR ${(n * 100_000).toLocaleString()}`;
+    if (unit === "k") return "$" + (n * 1_000).toLocaleString();
+  }
+
+  /* "pkr 50000000", "usd 850000" */
+  const prefixed = text.match(/\b(pkr|usd|rs\.?)\s*([\d,]+(?:\.\d+)?)/i);
+  if (prefixed) {
+    const cur = /pkr|rs/i.test(prefixed[1]) ? "PKR" : "$";
+    const n = parseFloat(prefixed[2].replace(/,/g, ""));
+    return `${cur} ${n.toLocaleString()}`;
+  }
+
+  /* Bare large number when context seems budget-related */
+  if (/budget|price|cost|afford|range|under|below|around|max/i.test(text)) {
+    const bare = text.match(/\b(\d[\d,]{2,})\b/);
+    if (bare) {
+      const n = parseFloat(bare[1].replace(/,/g, ""));
+      if (n >= 1000) return "$" + n.toLocaleString();
+    }
+  }
+
   return null;
 }
+
+/* --- Contact ------------------------------------------------------- */
 
 function detectPhone(text: string): string | null {
   const m = text.match(
@@ -160,87 +294,98 @@ function detectEmail(text: string): string | null {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Conversational state machine                                       */
+/*  Conversational state machine (anti-loop, context-aware)            */
 /* ------------------------------------------------------------------ */
 
-function getAIResponse(lead: LeadData, step: ConvoStep): { text: string; nextStep: ConvoStep } {
-  switch (step) {
-    case "greeting": {
-      const parts: string[] = [];
-      if (lead.intent !== "Pending") parts.push(`**${lead.intent}**`);
-      if (lead.propertyType !== "—") parts.push(`a **${lead.propertyType}**`);
-      if (lead.location !== "—") parts.push(`in **${lead.location}**`);
-      if (lead.budget !== "—") parts.push(`with a budget around **${lead.budget}**`);
+/** Count how many lead fields are filled (not "—" / "Pending"). */
+function filledCount(lead: LeadData): number {
+  let n = 0;
+  if (lead.intent !== "Pending") n++;
+  if (lead.propertyType !== "—") n++;
+  if (lead.location !== "—") n++;
+  if (lead.budget !== "—") n++;
+  if (lead.contact !== "—") n++;
+  return n;
+}
 
-      const hasDetailGap =
-        lead.location === "—" || lead.budget === "—" || lead.propertyType === "—";
+interface AIResult {
+  text: string;
+  nextStep: ConvoStep;
+}
 
-      if (parts.length > 0 && !hasDetailGap) {
-        return {
-          text: `Excellent taste! I see you're interested in ${parts.join(", ")}. To send you our curated VIP property list and schedule a private tour, could you share your **name** and **phone number**?`,
-          nextStep: "contact",
-        };
-      }
-      if (parts.length > 0) {
-        const missing: string[] = [];
-        if (lead.budget === "—") missing.push("estimated budget");
-        if (lead.location === "—") missing.push("preferred city or neighborhood");
-        if (lead.propertyType === "—") missing.push("property type");
-        return {
-          text: `Great choice — ${parts.join(", ")}! Could you also let me know your **${missing.join("** and **")}**?`,
-          nextStep: "details",
-        };
-      }
-      return {
-        text: "I'd love to help! Could you tell me what **type of property** you're looking for, your **preferred city**, and your **budget range**?",
-        nextStep: "details",
-      };
-    }
+function getAIResponse(
+  lead: LeadData,
+  step: ConvoStep,
+  userTurns: number,
+  lastAiText: string,
+  justFilledFields: string[],
+): AIResult {
+  /* ---------- helpers ---------- */
+  const filled = filledCount(lead);
+  const missingCore: string[] = [];
+  if (lead.location === "—") missingCore.push("preferred city or area");
+  if (lead.budget === "—") missingCore.push("budget range");
+  if (lead.propertyType === "—") missingCore.push("type of property");
 
-    case "details": {
-      const hasDetailGap =
-        lead.location === "—" || lead.budget === "—" || lead.propertyType === "—";
-      if (hasDetailGap) {
-        const missing: string[] = [];
-        if (lead.budget === "—") missing.push("estimated budget");
-        if (lead.location === "—") missing.push("preferred city");
-        if (lead.propertyType === "—") missing.push("property type");
-        return {
-          text: `Thanks for the details! Could you also share your **${missing.join("** and **")}** so I can find the perfect match?`,
-          nextStep: "details",
-        };
-      }
-      if (lead.contact !== "—") {
-        return {
-          text: `Perfect! I've locked in your preferences and forwarded your **VIP profile** to our senior agent. Expect a call or WhatsApp message shortly! 🏡✨`,
-          nextStep: "qualified",
-        };
-      }
-      return {
-        text: `Wonderful! I have some stunning options for you. To send you the curated VIP list and schedule a **private viewing**, could you share your **name** and **phone number**?`,
-        nextStep: "contact",
-      };
-    }
+  const needContact = lead.contact === "—";
+  const acknowledge = justFilledFields
+    .map((f) => {
+      if (f === "location") return `**${lead.location}**`;
+      if (f === "budget") return `budget of **${lead.budget}**`;
+      if (f === "propertyType") return `**${lead.propertyType}**`;
+      if (f === "intent") return `looking to **${lead.intent}**`;
+      return null;
+    })
+    .filter(Boolean);
 
-    case "contact": {
-      if (lead.contact !== "—") {
-        return {
-          text: `Perfect! I've locked in your preferences and forwarded your **VIP profile** to our senior agent. Expect a call or WhatsApp message shortly! 🏡✨`,
-          nextStep: "qualified",
-        };
-      }
-      return {
-        text: `I just need your **phone number** or **email** to finalize your VIP profile and connect you with our top agent.`,
-        nextStep: "contact",
-      };
-    }
+  const ack = acknowledge.length > 0 ? `Got it — ${acknowledge.join(", ")}! ` : "";
 
-    case "qualified":
-      return {
-        text: `Your VIP profile is active! Our agent will be reaching out soon. Is there anything else I can help you with?`,
-        nextStep: "qualified",
-      };
+  /* ---------- qualified (contact captured) ---------- */
+  if (lead.contact !== "—") {
+    return {
+      text: `${ack}Perfect! I've locked in your preferences and forwarded your **VIP profile** to our senior agent. Expect a call or WhatsApp message shortly! 🏡✨`,
+      nextStep: "qualified",
+    };
   }
+
+  /* ---------- enough info OR 3+ turns → ask for contact ---------- */
+  if (filled >= 3 || userTurns >= 3) {
+    const summary: string[] = [];
+    if (lead.propertyType !== "—") summary.push(`a **${lead.propertyType}**`);
+    if (lead.location !== "—") summary.push(`in **${lead.location}**`);
+    if (lead.budget !== "—") summary.push(`around **${lead.budget}**`);
+
+    const variants = [
+      `${ack}Excellent! ${summary.length > 0 ? `I've noted ${summary.join(", ")}. ` : ""}To send you our curated VIP list and schedule a **private viewing**, could you share your **phone number** or **email**?`,
+      `${ack}Wonderful — ${summary.length > 0 ? `${summary.join(", ")} is a fantastic choice. ` : ""}I just need your **phone number** to connect you with our top agent!`,
+      `${ack}Great profile so far! ${summary.length > 0 ? `(${summary.join(", ")}) ` : ""}Please share your **contact number** so our senior agent can reach out with exclusive listings. 📲`,
+    ];
+    const text = pickNonRepeat(variants, lastAiText);
+    return { text, nextStep: "contact" };
+  }
+
+  /* ---------- greeting / early turns → gather details ---------- */
+  if (missingCore.length === 0) {
+    /* All core filled but no contact yet */
+    const text = `${ack}I've got everything I need. Just drop your **phone number** or **email** and I'll connect you with a VIP agent right away!`;
+    return { text, nextStep: "contact" };
+  }
+
+  /* Some core fields missing */
+  const ask = missingCore.slice(0, 2).join("** and **");
+  const variants = [
+    `${ack}To find your perfect match, could you share your **${ask}**?`,
+    `${ack}Almost there! I just need your **${ask}** to pull up the best options for you.`,
+    `${ack}Thanks for the details! What's your **${ask}**?`,
+  ];
+  const text = pickNonRepeat(variants, lastAiText);
+  return { text, nextStep: step === "greeting" ? "details" : step };
+}
+
+/** Pick a response that differs from the last AI message to prevent loops. */
+function pickNonRepeat(variants: string[], lastAiText: string): string {
+  const different = variants.filter((v) => v !== lastAiText);
+  return different.length > 0 ? different[0] : variants[0];
 }
 
 /* ------------------------------------------------------------------ */
@@ -298,6 +443,8 @@ export default function EstateLead() {
   const [highlightField, setHighlightField] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [timestamp, setTimestamp] = useState("—");
+  const [userTurns, setUserTurns] = useState(0);
+  const [lastAiText, setLastAiText] = useState("");
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -350,50 +497,81 @@ export default function EstateLead() {
       setMessages((prev) => [...prev, userMsg]);
       if (!text) setInput("");
 
+      const turnNum = userTurns + 1;
+      setUserTurns(turnNum);
+
+      /* -- determine if this is a short reply to a location question -- */
+      const isShortReply =
+        msg.trim().split(/\s+/).length <= 3 &&
+        (step === "details" || step === "greeting") &&
+        lead.location === "—";
+
       /* -- extract data -- */
       const newLead = { ...lead };
-      let justHighlighted: string | null = null;
+      const justFilled: string[] = [];
 
       const intent = detectIntent(msg);
       if (intent && newLead.intent === "Pending") {
         newLead.intent = intent;
-        justHighlighted = "intent";
+        justFilled.push("intent");
+      }
+      /* Default intent to Buy for viewing / property / price mentions */
+      if (newLead.intent === "Pending" && /\b(book|viewing|property|price|villa|house|apartment|plot|condo)\b/i.test(msg)) {
+        newLead.intent = "Buy";
+        justFilled.push("intent");
       }
 
       const pt = detectPropertyType(msg);
       if (pt && newLead.propertyType === "—") {
         newLead.propertyType = pt;
-        justHighlighted = "propertyType";
+        justFilled.push("propertyType");
       }
 
-      const loc = detectLocation(msg);
-      if (loc && newLead.location === "—") {
-        newLead.location = loc;
-        justHighlighted = "location";
+      /* Emaar heuristic */
+      if (/\bemaar\b/i.test(msg)) {
+        const emaar = applyEmaarHeuristic(msg, newLead);
+        if (emaar.location && newLead.location === "—") {
+          newLead.location = emaar.location;
+          justFilled.push("location");
+        }
+        if (emaar.propertyType && newLead.propertyType === "—") {
+          newLead.propertyType = emaar.propertyType;
+          justFilled.push("propertyType");
+        }
+      }
+
+      /* Normal location detection (skip if Emaar already set it) */
+      if (newLead.location === "—") {
+        const loc = detectLocation(msg, isShortReply);
+        if (loc) {
+          newLead.location = loc;
+          justFilled.push("location");
+        }
       }
 
       const bud = detectBudget(msg);
       if (bud && newLead.budget === "—") {
         newLead.budget = bud;
-        justHighlighted = "budget";
+        justFilled.push("budget");
       }
 
       const phone = detectPhone(msg);
       const email = detectEmail(msg);
       if ((phone || email) && newLead.contact === "—") {
         newLead.contact = phone ?? email ?? "—";
-        justHighlighted = "contact";
+        justFilled.push("contact");
       }
 
       newLead.temperature = tempLabel(calcProgress(newLead));
       setLead(newLead);
-      if (justHighlighted) setHighlightField(justHighlighted);
+      if (justFilled.length > 0) setHighlightField(justFilled[justFilled.length - 1]);
 
       /* -- AI response with typing delay -- */
       setTyping(true);
       setTimeout(() => {
-        const { text: aiText, nextStep } = getAIResponse(newLead, step);
+        const { text: aiText, nextStep } = getAIResponse(newLead, step, turnNum, lastAiText, justFilled);
         setStep(nextStep);
+        setLastAiText(aiText);
         const aiMsg: ChatMessage = {
           id: `ai-${Date.now()}`,
           role: "ai",
@@ -425,7 +603,7 @@ export default function EstateLead() {
         inputRef.current?.focus();
       }, 600 + Math.random() * 400);
     },
-    [input, lead, step]
+    [input, lead, step, userTurns, lastAiText, timestamp]
   );
 
   const handleReset = () => {
@@ -439,6 +617,8 @@ export default function EstateLead() {
     setToastVisible(false);
     setHighlightField(null);
     setCopied(false);
+    setUserTurns(0);
+    setLastAiText("");
   };
 
   const webhookPayload = JSON.stringify(
